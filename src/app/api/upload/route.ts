@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-import { createSession, updateSession } from "@/lib/session-store";
-import { processUploadedFile, ProcessedFile } from "@/lib/pdf-utils";
+import { processUploadedFile } from "@/lib/pdf-utils";
 import {
   extractQuestions,
   extractAnswers,
@@ -95,63 +94,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Both files required" }, { status: 400 });
     }
 
-    const sessionId = uuidv4();
-    createSession(sessionId);
+    const qpBuffer = Buffer.from(await qpFile.arrayBuffer());
+    const asBuffer = Buffer.from(await asFile.arrayBuffer());
 
-    // Kick off processing in the background
-    processInBackground(
-      sessionId,
-      Buffer.from(await qpFile.arrayBuffer()),
-      Buffer.from(await asFile.arrayBuffer()),
-      qpFile.name,
-      asFile.name
-    ).catch((e) => {
-      console.error("[upload] background processing crashed:", e);
-      updateSession(sessionId, { stage: "error", error: String(e) });
-    });
+    const warnings: string[] = [];
 
-    return NextResponse.json({ sessionId });
-  } catch (e) {
-    console.error("[upload] POST error:", e);
-    return NextResponse.json({ error: "Upload failed" }, { status: 500 });
-  }
-}
-
-async function processInBackground(
-  sessionId: string,
-  qpBuffer: Buffer,
-  asBuffer: Buffer,
-  qpName: string,
-  asName: string
-) {
-  const warnings: string[] = [];
-
-  try {
-    // ── Stage 1: Extract questions ─────────────────────────────────────────
-    updateSession(sessionId, { stage: "extracting-questions", progress: 20 });
-    console.log(`[${sessionId}] processing question paper: ${qpName}`);
-
-    const qpFile: ProcessedFile = await processUploadedFile(qpBuffer, qpName);
-    const { questions, qualityWarning: qw1 } = await extractQuestions(qpFile);
+    // ── Stage 1: Extract questions ──
+    const qpFileProcessed = await processUploadedFile(qpBuffer, qpFile.name);
+    const { questions, qualityWarning: qw1 } = await extractQuestions(qpFileProcessed);
     if (qw1) warnings.push(qw1);
-    console.log(`[${sessionId}] extracted ${questions.length} questions`);
 
-    // ── Stage 2: Extract answers ───────────────────────────────────────────
-    updateSession(sessionId, { stage: "extracting-answers", progress: 45 });
-    console.log(`[${sessionId}] processing answer sheet: ${asName}`);
-
-    const asFile: ProcessedFile = await processUploadedFile(asBuffer, asName);
-    const { answers, qualityWarning: qw2 } = await extractAnswers(asFile);
+    // ── Stage 2: Extract answers ──
+    const asFileProcessed = await processUploadedFile(asBuffer, asFile.name);
+    const { answers, qualityWarning: qw2 } = await extractAnswers(asFileProcessed);
     if (qw2) warnings.push(qw2);
-    console.log(`[${sessionId}] extracted ${answers.length} answer blocks`);
 
-    // ── Stage 3: Map answers to questions ──────────────────────────────────
-    updateSession(sessionId, { stage: "mapping", progress: 65 });
+    // ── Stage 3: Map answers to questions ──
     const { mapped, orphans } = await mapAnswers(questions, answers);
-    console.log(`[${sessionId}] mapped: ${mapped.filter(m=>m.answer).length} confirmed/inferred, ${orphans.length} orphans`);
 
-    // ── Stage 4: Grade ─────────────────────────────────────────────────────
-    updateSession(sessionId, { stage: "grading", progress: 80 });
+    // ── Stage 4: Grade ──
     for (const m of mapped) {
       if (m.answer) {
         try {
@@ -173,7 +134,7 @@ async function processInBackground(
     const overallFeedback = await generateOverallFeedback(mapped, totalScore, totalMaxScore);
 
     const result: ProcessingResult = {
-      sessionId,
+      sessionId: uuidv4(),
       questions,
       mappedQuestions: mapped,
       orphanAnswers: orphans,
@@ -183,19 +144,14 @@ async function processInBackground(
       answeredCount,
       unansweredCount,
       orphanCount: orphans.length,
-      // Display: pass raw data URLs for answer sheet pages
-      questionPaperImages: qpFile.displayImages,
-      answerSheetImages:   asFile.displayImages,
+      questionPaperImages: qpFileProcessed.displayImages,
+      answerSheetImages:   asFileProcessed.displayImages,
       qualityWarning: warnings.length > 0 ? warnings.join(" ") : undefined,
     };
 
-    updateSession(sessionId, { stage: "done", progress: 100, result });
-    console.log(`[${sessionId}] done! score=${totalScore}/${totalMaxScore}`);
+    return NextResponse.json(result);
   } catch (e) {
-    console.error(`[${sessionId}] processing error:`, e);
-    updateSession(sessionId, {
-      stage: "error",
-      error: e instanceof Error ? e.message : String(e),
-    });
+    console.error("[upload] POST error:", e);
+    return NextResponse.json({ error: e instanceof Error ? e.message : "Processing failed" }, { status: 500 });
   }
 }

@@ -19,7 +19,7 @@ interface ReviewScreenProps {
 
 export default function ReviewScreen({ result, onReset, currentView, onViewChange }: ReviewScreenProps) {
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(
-    result.mappedQuestions[0]?.question.id || null
+    result?.mappedQuestions?.[0]?.question?.id || null
   );
   const [selectedOrphanId, setSelectedOrphanId] = useState<string | null>(null);
 
@@ -57,11 +57,11 @@ export default function ReviewScreen({ result, onReset, currentView, onViewChang
     }
   };
 
-  const selectedQuestion = result.mappedQuestions.find(
+  const selectedQuestion = result?.mappedQuestions?.find(
     (m) => m.question.id === selectedQuestionId
   ) || null;
 
-  const selectedOrphan = result.orphanAnswers.find(
+  const selectedOrphan = result?.orphanAnswers?.find(
     (o) => o.answer.id === selectedOrphanId
   ) || null;
 

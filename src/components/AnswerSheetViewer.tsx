@@ -193,7 +193,7 @@ export default function AnswerSheetViewer({
   const [currentPage, setCurrentPage] = useState(0);
   const [zoom, setZoom] = useState(1);
 
-  const isPDF = images[0]?.startsWith("data:application/pdf");
+  const isPDF = images?.[0]?.startsWith("data:application/pdf") ?? false;
 
   // Compute highlights
   const highlights: HighlightInfo[] = [];

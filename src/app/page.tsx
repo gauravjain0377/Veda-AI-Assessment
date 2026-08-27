@@ -300,58 +300,55 @@ export default function HomePage() {
     if (!canStart) return;
 
     setStage("uploading");
-    setProgress(10);
+    setProgress(5);
     setError(null);
+
+    // Simulated progress increments during the synchronous API call
+    let currentProgress = 5;
+    const progressInterval = setInterval(() => {
+      if (currentProgress < 92) {
+        currentProgress += Math.floor(Math.random() * 3) + 1; // Increment by 1-3%
+        if (currentProgress > 92) currentProgress = 92;
+        setProgress(currentProgress);
+
+        // Update processing stages dynamically based on progress percent
+        if (currentProgress < 25) {
+          setStage("uploading");
+        } else if (currentProgress < 50) {
+          setStage("extracting-questions");
+        } else if (currentProgress < 70) {
+          setStage("extracting-answers");
+        } else if (currentProgress < 85) {
+          setStage("mapping");
+        } else {
+          setStage("grading");
+        }
+      }
+    }, 600);
 
     try {
       const formData = new FormData();
       formData.append("questionPaper", questionPaper!.file);
       formData.append("answerSheet", answerSheet!.file);
 
-      const uploadRes = await fetch("/api/upload", {
+      const response = await fetch("/api/upload", {
         method: "POST",
         body: formData,
       });
 
-      if (!uploadRes.ok) {
-        throw new Error("Upload failed");
+      clearInterval(progressInterval);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to process files");
       }
 
-      const { sessionId } = await uploadRes.json();
-      setProgress(20);
-
-      const eventSource = new EventSource(`/api/status/${sessionId}`);
-
-      eventSource.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        setStage(data.stage as ProcessingStage);
-        setProgress(data.progress || 0);
-
-        if (data.stage === "done") {
-          eventSource.close();
-          fetch(`/api/results/${sessionId}`)
-            .then((r) => r.json())
-            .then((resultData) => {
-              setResult(resultData);
-              setStage("done");
-            })
-            .catch((err) => {
-              setError("Failed to load results");
-              setStage("error");
-            });
-        } else if (data.stage === "error") {
-          eventSource.close();
-          setError(data.error || "Processing failed");
-          setStage("error");
-        }
-      };
-
-      eventSource.onerror = () => {
-        eventSource.close();
-        setError("Connection error during processing");
-        setStage("error");
-      };
+      const resultData = await response.json();
+      setProgress(100);
+      setResult(resultData);
+      setStage("done");
     } catch (err) {
+      clearInterval(progressInterval);
       setError(err instanceof Error ? err.message : "Something went wrong");
       setStage("error");
     }
