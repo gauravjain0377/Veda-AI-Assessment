@@ -1,16 +1,43 @@
-// Model: gemini-3.6-flash — FREE TIER (no billing required)
-// Docs: https://ai.google.dev/pricing
+// ─── API Key Rotation Manager ─────────────────────────────────────────────────
+// Supports multiple keys: GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3, etc.
+// When a key hits its quota (429), it's marked exhausted and the next key is used.
 
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold, Part } from "@google/generative-ai";
 import { Question, AnswerBlock, GradingResult, MappedQuestion } from "./types";
 import { ProcessedFile } from "./pdf-utils";
 
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey) {
-  console.warn("[Gemini] GEMINI_API_KEY not set — all calls will fail with 403");
+const ALL_KEYS: string[] = [
+  process.env.GEMINI_API_KEY,
+  process.env.GEMINI_API_KEY_2,
+  process.env.GEMINI_API_KEY_3,
+  process.env.GEMINI_API_KEY_4,
+  process.env.GEMINI_API_KEY_5,
+].filter(Boolean) as string[];
+
+if (ALL_KEYS.length === 0) {
+  console.warn("[Gemini] No API keys set — all calls will fail with 403");
+} else {
+  console.log(`[Gemini] Loaded ${ALL_KEYS.length} API key(s) for rotation`);
 }
 
-const genAI = new GoogleGenerativeAI(apiKey ?? "MISSING_KEY");
+// Track exhausted keys and when their quota resets (timestamp in ms)
+const exhaustedKeys = new Map<string, number>();
+
+function getAvailableKey(): string | null {
+  const now = Date.now();
+  // Clear expired exhausted marks (reset after 1 hour to be safe)
+  for (const [key, expiresAt] of exhaustedKeys.entries()) {
+    if (now > expiresAt) exhaustedKeys.delete(key);
+  }
+  // Return first non-exhausted key
+  return ALL_KEYS.find((k) => !exhaustedKeys.has(k)) ?? null;
+}
+
+function markKeyExhausted(key: string, retryAfterSeconds = 3600) {
+  exhaustedKeys.set(key, Date.now() + retryAfterSeconds * 1000);
+  const remaining = ALL_KEYS.filter((k) => !exhaustedKeys.has(k)).length;
+  console.warn(`[Gemini] Key ...${key.slice(-6)} marked exhausted for ${retryAfterSeconds}s. ${remaining}/${ALL_KEYS.length} keys still available.`);
+}
 
 // Safety settings — allow educational content
 const safetySettings = [
@@ -21,11 +48,12 @@ const safetySettings = [
 ];
 
 // FREE TIER MODEL — gemini-3.6-flash
-// Free limits: 15 RPM, 1M TPM, 1500 RPD
 const FREE_MODEL = "gemini-3.6-flash";
 
-function getModel(jsonMode = true) {
-  return genAI.getGenerativeModel({
+function getModel(jsonMode = true, key?: string) {
+  const activeKey = key ?? getAvailableKey();
+  if (!activeKey) throw new Error("All Gemini API keys have exceeded their quota. Please add more keys or wait for the quota to reset (usually resets at midnight Pacific Time).");
+  return new GoogleGenerativeAI(activeKey).getGenerativeModel({
     model: FREE_MODEL,
     safetySettings,
     generationConfig: {
@@ -40,15 +68,66 @@ function fileToPart(mimeType: string, base64Data: string): Part {
   return { inlineData: { mimeType, data: base64Data } };
 }
 
-/** Helper to retry Gemini operations on failure (especially rate-limiting or overloaded server) */
-async function withRetry<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
+/** Helper to retry Gemini operations on failure (rate-limiting or overloaded server).
+ *  On 429: marks the current key exhausted and immediately retries with the next key.
+ *  On other errors: uses exponential backoff.
+ */
+async function withRetry<T>(
+  fn: (key: string) => Promise<T>,
+  retries = ALL_KEYS.length * 2,
+  delay = 2000
+): Promise<T> {
+  const key = getAvailableKey();
+  if (!key) {
+    throw new Error("All Gemini API keys have exceeded their quota. Please add more keys or wait for the quota to reset (usually resets at midnight Pacific Time).");
+  }
   try {
-    return await fn();
-  } catch (error) {
-    if (retries <= 0) {
-      throw error;
+    return await fn(key);
+  } catch (error: any) {
+    const is429 = error?.status === 429 ||
+      (error?.message && error.message.includes("429")) ||
+      (error?.message && error.message.includes("Too Many Requests")) ||
+      (error?.message && error.message.includes("RESOURCE_EXHAUSTED"));
+
+    if (is429) {
+      // Extract retryDelay from errorDetails (e.g., "53s")
+      let exhaustSeconds = 3600; // mark exhausted for 1 hour by default
+      try {
+        const retryInfo = error?.errorDetails?.find(
+          (d: any) => d["@type"]?.includes("RetryInfo")
+        );
+        if (retryInfo?.retryDelay) {
+          const s = parseInt(retryInfo.retryDelay.replace("s", ""), 10);
+          if (!isNaN(s)) exhaustSeconds = s + 60; // expire 60s after suggested retry
+        }
+      } catch {}
+
+      // Mark this key exhausted so next call uses a different key
+      markKeyExhausted(key, exhaustSeconds);
+
+      if (retries <= 0) {
+        console.error(`[Gemini] All retries exhausted.`);
+        throw error;
+      }
+
+      // Check if another key is available immediately
+      const nextKey = getAvailableKey();
+      if (nextKey) {
+        console.log(`[Gemini] Switching to next API key ...${nextKey.slice(-6)}`);
+        return withRetry(fn, retries - 1, delay); // immediate retry with new key
+      }
+
+      // All keys exhausted — wait for the shortest cooldown
+      const shortestWaitMs = Math.min(...[...exhaustedKeys.values()].map(t => t - Date.now()));
+      const waitSec = Math.max(Math.ceil(shortestWaitMs / 1000), 5);
+      console.warn(`[Gemini] All keys exhausted. Waiting ${waitSec}s for next available key...`);
+      await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
+      return withRetry(fn, retries - 1, delay);
     }
-    console.warn(`[Gemini] Request failed. Retrying in ${delay}ms... Remaining retries: ${retries}. Error:`, error);
+
+    // For non-quota errors (network, 500, etc.), use exponential backoff
+    if (retries <= 0) throw error;
+    console.warn(`[Gemini] Request failed. Retrying in ${delay}ms... (${retries} left). Error:`, error);
     await new Promise((resolve) => setTimeout(resolve, delay));
     return withRetry(fn, retries - 1, delay * 2);
   }
@@ -74,8 +153,6 @@ export async function extractQuestions(file: ProcessedFile): Promise<{
   questions: Question[];
   qualityWarning?: string;
 }> {
-  const model = getModel(true);
-
   // Build parts array: each part is a page/file
   const fileParts: Part[] = file.parts.map((p) => fileToPart(p.mimeType, p.data));
 
@@ -107,16 +184,20 @@ Return ONLY this JSON (no extra text):
 }`;
 
   try {
-    const response = await withRetry(() => model.generateContent([prompt, ...fileParts]));
+    const response = await withRetry((key) => getModel(true, key).generateContent([prompt, ...fileParts]));
     const text = response.response.text();
     const parsed = parseJSON<{ questions: Question[]; qualityWarning?: string }>(text);
     return {
       questions: parsed.questions ?? [],
       qualityWarning: parsed.qualityWarning ?? undefined,
     };
-  } catch (e) {
+  } catch (e: any) {
     console.error("[Gemini] extractQuestions error:", e);
-    return { questions: [], qualityWarning: "Could not extract questions — check image quality." };
+    const isQuota = e?.status === 429 || (e?.message && e.message.includes("429"));
+    const msg = isQuota
+      ? "⚠️ Gemini API quota exceeded (free tier limit reached). Please wait a few minutes and try again."
+      : "Could not extract questions — check image quality.";
+    return { questions: [], qualityWarning: msg };
   }
 }
 
@@ -129,8 +210,6 @@ export async function extractAnswers(file: ProcessedFile): Promise<{
   answers: AnswerBlock[];
   qualityWarning?: string;
 }> {
-  const model = getModel(true);
-
   const fileParts: Part[] = file.parts.map((p) => fileToPart(p.mimeType, p.data));
 
   const prompt = `You are an expert at reading handwritten student answer sheets. Analyze this ${file.isPDF ? "PDF" : "image"}.
@@ -161,16 +240,20 @@ Return ONLY this JSON (no extra text):
 }`;
 
   try {
-    const response = await withRetry(() => model.generateContent([prompt, ...fileParts]));
+    const response = await withRetry((key) => getModel(true, key).generateContent([prompt, ...fileParts]));
     const text = response.response.text();
     const parsed = parseJSON<{ answers: AnswerBlock[]; qualityWarning?: string }>(text);
     return {
       answers: parsed.answers ?? [],
       qualityWarning: parsed.qualityWarning ?? undefined,
     };
-  } catch (e) {
+  } catch (e: any) {
     console.error("[Gemini] extractAnswers error:", e);
-    return { answers: [], qualityWarning: "Could not extract answers — check image quality." };
+    const isQuota = e?.status === 429 || (e?.message && e.message.includes("429"));
+    const msg = isQuota
+      ? "⚠️ Gemini API quota exceeded (free tier limit reached). Please wait a few minutes and try again."
+      : "Could not extract answers — check image quality.";
+    return { answers: [], qualityWarning: msg };
   }
 }
 
@@ -184,8 +267,6 @@ export async function semanticMatch(
   answerCandidates: { id: string; text: string }[]
 ): Promise<{ answerId: string; confidence: number } | null> {
   if (answerCandidates.length === 0) return null;
-
-  const model = getModel(true);
 
   const prompt = `Given this question and candidate student answers, find the best semantic match.
 
@@ -204,7 +285,7 @@ Return ONLY JSON:
 Set bestIndex to -1 and answerId to null if no good match (confidence < 0.6).`;
 
   try {
-    const response = await withRetry(() => model.generateContent(prompt));
+    const response = await withRetry((key) => getModel(true, key).generateContent(prompt));
     const parsed = parseJSON<{ bestIndex: number; answerId: string | null; confidence: number }>(
       response.response.text()
     );
@@ -225,8 +306,6 @@ export async function gradeQuestion(
   answerText: string,
   maxScore: number = 2
 ): Promise<GradingResult> {
-  const model = getModel(true);
-
   const prompt = `You are a teacher grading a student exam answer. Be fair and specific.
 
 QUESTION (${maxScore} marks): "${questionText}"
@@ -247,7 +326,7 @@ Rules:
 - verdict = "incorrect" if score = 0`;
 
   try {
-    const response = await withRetry(() => model.generateContent(prompt));
+    const response = await withRetry((key) => getModel(true, key).generateContent(prompt));
     const parsed = parseJSON<GradingResult>(response.response.text());
     return {
       score: Math.max(0, Math.min(parsed.score, maxScore)),
@@ -271,12 +350,6 @@ export async function generateOverallFeedback(
   const answered = mapped.filter((m) => m.answer !== null).length;
   const unanswered = mapped.filter((m) => m.answer === null).length;
 
-  const model = genAI.getGenerativeModel({
-    model: FREE_MODEL,
-    safetySettings,
-    generationConfig: { temperature: 0.7 },
-  });
-
   const prompt = `A student scored ${totalScore}/${totalMax} (${pct}%) on an exam.
 Answered: ${answered} questions. Left unanswered: ${unanswered} questions.
 
@@ -284,7 +357,13 @@ Write 2-3 sentences of overall feedback for the teacher to share with the studen
 Be encouraging but honest. Return ONLY the plain text feedback, no JSON, no quotes.`;
 
   try {
-    const response = await withRetry(() => model.generateContent(prompt));
+    const response = await withRetry((key) =>
+      new GoogleGenerativeAI(key).getGenerativeModel({
+        model: FREE_MODEL,
+        safetySettings,
+        generationConfig: { temperature: 0.7 },
+      }).generateContent(prompt)
+    );
     return response.response.text().trim();
   } catch {
     return `The student scored ${totalScore}/${totalMax} (${pct}%). ${answered} questions answered, ${unanswered} left unanswered.`;
