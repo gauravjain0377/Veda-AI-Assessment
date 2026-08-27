@@ -1,9 +1,11 @@
 # VedaAI Grader — AI-Powered Answer Sheet Evaluation
 
+![VedaAI Grader](public/veda.png)
+
 A full-stack web application that lets teachers upload a question paper and a student's handwritten answer sheet, then automatically extracts questions, maps answers, highlights regions on the answer sheet, and provides AI-generated grades and feedback.
 
 ## Live Demo
-🔗 **[Live URL](https://vedaai-grader.vercel.app)** _(replace after deploying)_
+🔗 **[Live URL](https://vedaai-grader.vercel.app)**
 
 ## Features
 - 📤 **Upload** question papers and answer sheets (PDF, JPG, PNG)
