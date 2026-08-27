@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "src/app/api/upload/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/status/[sessionId]/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/results/[sessionId]/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

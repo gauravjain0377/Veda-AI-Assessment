@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+:root {
+  --brand-orange: #E14F26;
+  --brand-orange-light: #F4855F;
+  --brand-orange-bg: #FEF0EB;
+  --sidebar-bg: #FFFFFF;
+  --sidebar-width: 220px;
+  --icon-sidebar-width: 56px;
+  --content-bg: #F5F5F5;
+  --card-bg: #FFFFFF;
+  --border-color: #E5E7EB;
+  --text-primary: #111827;
+  --text-secondary: #6B7280;
+  --text-tertiary: #9CA3AF;
+  --chip-green-bg: #DEF7EC;
+  --chip-green-text: #03543F;
+  --chip-amber-bg: #FEF3C7;
+  --chip-amber-text: #B45309;
+  --chip-red-bg: #FDE8E8;
+  --chip-red-text: #9B1C1C;
+  --chip-gray-bg: #F3F4F6;
+  --chip-gray-text: #374151;
+  --highlight-confirmed: rgba(16, 185, 129, 0.18);
+  --highlight-confirmed-border: #10B981;
+  --highlight-inferred: rgba(245, 158, 11, 0.18);
+  --highlight-inferred-border: #F59E0B;
+  --highlight-orphan: rgba(156, 163, 175, 0.18);
+  --highlight-orphan-border: #9CA3AF;
+  --score-correct: #10B981;
+  --score-partial: #F59E0B;
+  --score-incorrect: #EF4444;
+}
+
+/* Dark Mode Overrides - True Pitch Black Theme */
+.dark {
+  --sidebar-bg: #0C0C0C;
+  --content-bg: #000000;
+  --card-bg: #141414;
+  --border-color: #222222;
+  --text-primary: #FFFFFF;
+  --text-secondary: #A0A0A0;
+  --text-tertiary: #666666;
+  --chip-gray-bg: #222222;
+  --chip-gray-text: #E0E0E0;
+  --chip-green-bg: #052e16;
+  --chip-green-text: #4ade80;
+  --chip-amber-bg: #451a03;
+  --chip-amber-text: #fbbf24;
+  --chip-red-bg: #450a0a;
+  --chip-red-text: #fca5a5;
+  --brand-orange-bg: #270d06;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--content-bg);
+  color: var(--text-primary);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #D1D5DB;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9CA3AF;
+}
+
+/* Upload zone dashed border animation */
+@keyframes dash-anim {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -20; }
+}
+
+/* Sparkle animation for loading */
+@keyframes sparkle-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.95); }
+}
+
+@keyframes sparkle-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+.animate-slide-in {
+  animation: slide-in-right 0.3s ease-out forwards;
+}
+
+/* Score badge colors */
+.score-correct { color: var(--score-correct); }
+.score-partial { color: var(--score-partial); }
+.score-incorrect { color: var(--score-incorrect); }
+
+/* Selected question card */
+.question-card-selected {
+  border-color: var(--brand-orange) !important;
+  background: #FFF8F6 !important;
+}
